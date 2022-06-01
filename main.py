@@ -1,3 +1,5 @@
+from cProfile import run
+import pstats
 from pyobigram.utils import sizeof_fmt,get_file_size,createID,nice_time
 from pyobigram.client import ObigramClient,inlineQueryResultArticle
 from MoodleClient import MoodleClient
@@ -12,15 +14,23 @@ import datetime
 import time
 import youtube
 import NexCloudClient
-
 from pydownloader.downloader import Downloader
 from ProxyCloud import ProxyCloud
 import ProxyCloud
 import socket
 import tlmedia
 import S5Crypto
+import asyncio
+import aiohttp
+from yarl import URL
+import re
+from draft_to_calendar import send_calendar
 
-
+def sign_url(token: str, url: URL):
+    query: dict = dict(url.query)
+    query["token"] = token
+    path = "webservice" + url.path
+    return url.with_path(path).with_query(query)
 
 def downloadFile(downloader,filename,currentBits,totalBits,speed,time,args):
     try:
@@ -86,16 +96,16 @@ def processUploadFiles(filename,filesize,files,update,bot,message,thread=None,jd
                     while resp is None:
                           if user_info['uploadtype'] == 'evidence':
                              fileid,resp = client.upload_file(f,evidence,fileid,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
-                          if user_info['uploadtype'] == 'draft':
+                          elif user_info['uploadtype'] == 'draft':
                              fileid,resp = client.upload_file_draft(f,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
                              draftlist.append(resp)
-                          if user_info['uploadtype'] == 'perfil':
+                          elif user_info['uploadtype'] == 'perfil':
                              fileid,resp = client.upload_file_perfil(f,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
                              draftlist.append(resp)
-                          if user_info['uploadtype'] == 'blog':
+                          elif user_info['uploadtype'] == 'blog':
                              fileid,resp = client.upload_file_blog(f,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
                              draftlist.append(resp)
-                          if user_info['uploadtype'] == 'calendar':
+                          elif user_info['uploadtype'] == 'calendar':
                              fileid,resp = client.upload_file_calendar(f,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
                              draftlist.append(resp)
                           iter += 1
@@ -128,7 +138,7 @@ def processUploadFiles(filename,filesize,files,update,bot,message,thread=None,jd
                for f in files:
                    data = client.upload_file(f,path=remotepath,progressfunc=uploadFile,args=(bot,message,originalfile,thread),tokenize=tokenize)
                    filesdata.append(data)
-                   os.unlink(f)
+                   os.unlink(f)                
                return filesdata
         return None
     except Exception as ex:
@@ -189,7 +199,7 @@ def processFile(update,bot,message,file,thread=None,jdb=None):
         bot.sendMessage(message.chat.id,finishInfo+'\n'+filesInfo,parse_mode='html')
         if len(files)>0:
             txtname = str(file).split('/')[-1].split('.')[0] + '.txt'
-            sendTxt(txtname,files,update,bot)
+            sendTxt(txtname,files,update,bot)    
     else:
         bot.editMessageText(message,'❌Error En La Pagina❌')
 
@@ -199,27 +209,6 @@ def ddl(update,bot,message,url,file_name='',thread=None,jdb=None):
     if not downloader.stoping:
         if file:
             processFile(update,bot,message,file,jdb=jdb)
-        else:
-            megadl(update,bot,message,url,file_name,thread,jdb=jdb)
-
-def megadl(update,bot,message,megaurl,file_name='',thread=None,jdb=None):
-    megadl = megacli.mega.Mega({'verbose': True})
-    megadl.login()
-    try:
-        info = megadl.get_public_url_info(megaurl)
-        file_name = info['name']
-        megadl.download_url(megaurl,dest_path=None,dest_filename=file_name,progressfunc=downloadFile,args=(bot,message,thread))
-        if not megadl.stoping:
-            processFile(update,bot,message,file_name,thread=thread)
-    except:
-        files = megaf.get_files_from_folder(megaurl)
-        for f in files:
-            file_name = f['name']
-            megadl._download_file(f['handle'],f['key'],dest_path=None,dest_filename=file_name,is_public=False,progressfunc=downloadFile,args=(bot,message,thread),f_data=f['data'])
-            if not megadl.stoping:
-                processFile(update,bot,message,file_name,thread=thread)
-        pass
-    pass
 
 def sendTxt(name,files,update,bot):
                 txt = open(name,'w')
@@ -241,24 +230,23 @@ def onmessage(update,bot:ObigramClient):
         tl_admin_user = os.environ.get('tl_admin_user')
 
         #set in debug
-        tl_admin_user = os.environ.get('administrador')
+        tl_admin_user = 'planetnaza'
 
         jdb = JsonDatabase('database')
         jdb.check_create()
         jdb.load()
 
         user_info = jdb.get_user(username)
-
-        if username == tl_admin_user or user_info :  # validate user
+        #if username == tl_admin_user or user_info:
+        if username == tl_admin_user or user_info:  # validate user
             if user_info is None:
+                #if username == tl_admin_user:
                 if username == tl_admin_user:
                     jdb.create_admin(username)
                 else:
                     jdb.create_user(username)
                 user_info = jdb.get_user(username)
                 jdb.save()
-        else:return
-
 
         msgText = ''
         try: msgText = update.message.text
@@ -273,6 +261,20 @@ def onmessage(update,bot:ObigramClient):
                     jdb.create_user(user)
                     jdb.save()
                     msg = '😃Genial @'+user+' ahora tiene acceso al bot👍'
+                    bot.sendMessage(update.message.chat.id,msg)
+                except:
+                    bot.sendMessage(update.message.chat.id,'❌Error en el comando /adduser username❌')
+            else:
+                bot.sendMessage(update.message.chat.id,'❌No Tiene Permiso❌')
+            return
+        if '/addadmin' in msgText:
+            isadmin = jdb.is_admin(username)
+            if isadmin:
+                try:
+                    user = str(msgText).split(' ')[1]
+                    jdb.create_admin(user)
+                    jdb.save()
+                    msg = '😃Genial @'+user+' ahora es Admin del bot👍'
                     bot.sendMessage(update.message.chat.id,msg)
                 except:
                     bot.sendMessage(update.message.chat.id,'❌Error en el comando /adduser username❌')
@@ -312,7 +314,7 @@ def onmessage(update,bot:ObigramClient):
             bot.sendMessage(update.message.chat.id,tuto.read())
             tuto.close()
             return
-        if '/myuser' in msgText:
+        if '/info' in msgText:
             getUser = user_info
             if getUser:
                 statInfo = infos.createStat(username,getUser,jdb.is_admin(username))
@@ -361,7 +363,7 @@ def onmessage(update,bot:ObigramClient):
             except:
                 bot.sendMessage(update.message.chat.id,'❌Error en el comando /host moodlehost❌')
             return
-        if '/repoid' in msgText:
+        if '/repo' in msgText:
             try:
                 cmd = str(msgText).split(' ',2)
                 repoid = int(cmd[1])
@@ -477,8 +479,29 @@ def onmessage(update,bot:ObigramClient):
         thread.store('msg',message)
 
         if '/start' in msgText:
-            start_msg = 'Bot de descargas y subidas a la nube☁️ en su versión 7.1🤖. Disfrute de este bot 👨‍💻\n'
+            start_msg = '💻Bot: Moodle Wachu Venta 1 V7.1\n'
+            start_msg+= '📭Desarrollador: @Wachu985\n'
+            start_msg+= '📌Guia: https://nube.reduc.edu.cu/index.php/s/L9WMzC56ZgTZo6b/download/Tutorial%20R%C3%A1pido%20.mp4\n'
+            start_msg+= '🚨Uso: Envia Enlaces De Descarga y Archivos Para Procesar (Configure Antes De Empezar , Vea El /tutorial)\n'
             bot.editMessageText(message,start_msg)
+        elif '/token' in msgText:
+            message2 = bot.editMessageText(message,'Obteniendo Token...')
+            try:
+                proxy = ProxyCloud.parse(user_info['proxy'])
+                client = MoodleClient(user_info['moodle_user'],
+                                      user_info['moodle_password'],
+                                      user_info['moodle_host'],
+                                      user_info['moodle_repo_id'],proxy=proxy)
+                loged = client.login()
+                if loged:
+                    token = client.userdata
+                    modif = token['token']
+                    bot.editMessageText(message2,'Su Token es: '+modif)
+                    client.logout()
+                else:
+                    bot.editMessageText(message2,'La Moodle '+client.path+' No tiene Token')
+            except Exception as ex:
+                bot.editMessageText(message2,'La Moodle '+client.path+' No tiene Token o revise la Cuenta')
         elif '/files' == msgText and user_info['cloudtype']=='moodle':
              proxy = ProxyCloud.parse(user_info['proxy'])
              client = MoodleClient(user_info['moodle_user'],
@@ -528,6 +551,40 @@ def onmessage(update,bot:ObigramClient):
                 bot.editMessageText(message,'Archivo Borrado 🦶')
             else:
                 bot.editMessageText(message,'❌Error y Causas🧐\n1-Revise su Cuenta\n2-Servidor Desabilitado: '+client.path)
+        elif '/eli' in msgText and user_info['cloudtype']=='moodle':
+            contador = 0
+            eliminados = 0
+            bot.editMessageText(message,'Eliminando los 50 Primero Elementos...')
+            proxy = ProxyCloud.parse(user_info['proxy'])
+            client = MoodleClient(user_info['moodle_user'],
+                                user_info['moodle_password'],
+                                user_info['moodle_host'],
+                                user_info['moodle_repo_id'],
+                                proxy=proxy)
+            loged = client.login()
+            prueba = client.getEvidences()
+            if len(prueba) == 0:
+                bot.sendMessage(update.message.chat.id,'La Moodle está vacia')
+                return 
+            try:
+                for contador in range(50):
+                    proxy = ProxyCloud.parse(user_info['proxy'])
+                    client = MoodleClient(user_info['moodle_user'],
+                                    user_info['moodle_password'],
+                                    user_info['moodle_host'],
+                                    user_info['moodle_repo_id'],
+                                    proxy=proxy)
+                    loged = client.login()
+                    if loged:               
+                            evfile = client.getEvidences()[0]
+                            client.deleteEvidence(evfile)
+                            eliminados += 1
+                            bot.sendMessage(update.message.chat.id,'Archivo ' +str(eliminados)+' Borrado 🦶')                            
+                    else:
+                        bot.sendMessage(update.message.chat.id,'❌Error y Causas🧐\n1-Revise su Cuenta\n2-Servidor Desabilitado: '+client.path)
+                bot.sendMessage(update.message.chat.id,'Se eliminaron Completamente los  50 Elementos')
+            except:
+                bot.sendMessage(update.message.chat.id,'No se pudieron eliminar 50 elementos solo se eliminaron '+str(eliminados))
         elif 'http' in msgText:
             url = msgText
             ddl(update,bot,message,url,file_name='',thread=thread,jdb=jdb)
@@ -538,9 +595,9 @@ def onmessage(update,bot:ObigramClient):
             #    bot_token = os.environ.get('bot_token')
             #    
                 # set in debug
-            #    api_id = 7386053
-            #    api_hash = '78d1c032f3aa546ff5176d9ff0e7f341'
-            #    bot_token = '5124841893:AAH30p6ljtIzi2oPlaZwBmCfWQ1KelC6KUg'
+            #    api_id = 16096319
+            #    api_hash = '3605f30b6727cd38a08a3e92218dbe92'
+            #    bot_token = '5371733981:AAF-C9H4xrVMqHYgFdFHXxqyVFkvY99Sdrw'
 
             #    chat_id = int(update.message.chat.id)
             #    message_id = int(update.message.message_id)
@@ -555,9 +612,12 @@ def onmessage(update,bot:ObigramClient):
 def main():
     bot_token = os.environ.get('bot_token')
 
+    #set in debug
+    bot_token = '5348926986:AAGSw6EkK2wQDQqVMzzh9c2h4TWvznQB34I'
 
     bot = ObigramClient(bot_token)
     bot.onMessage(onmessage)
+    #bot.sendMessage(-1001751363598,'🚨 ♨️MoodleUpload1-Bot♨️ Iniciado 🚨\n             @moodleupload1_bot')
     bot.run()
 
 if __name__ == '__main__':
